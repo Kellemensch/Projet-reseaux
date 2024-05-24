@@ -99,3 +99,45 @@ int min_hamming_distance(uint16_t generator) {
     return min_distance;
 }
 
+uint8_t crcGeneration(uint8_t m){
+    uint8_t crc = 0;
+
+    for (int i = 0; i < 8; i++){
+        if ((crc ^ m) & 0x80){
+            crc = (crc << 1) ^ POLYNOME;
+        }else{
+            crc <<= 1;
+        }
+        m <<= 1;
+    }
+
+    return crc;
+}
+
+
+uint8_t crcVerif(uint16_t m) {
+    uint8_t message = (m >> 8) & 0xFF;    // Extraire les 8 bits de message
+    uint8_t error = m & 0xFF;             // Extraire les 8 bits de code d'erreur
+
+    uint8_t new_crc = crcGeneration(message);
+    if (new_crc == error) {
+        return 0;
+    } else {
+        return new_crc;
+    }
+}
+
+
+int crc_error_amount(uint16_t m){
+    for (int i = 8; i < 16; ++i) {
+        m = chg_nth_bit(i, m);
+
+        if (crcVerif(m) == 0){
+            return i-8;
+        }
+
+        m = chg_nth_bit(i, m);
+    }
+
+    return -1;
+}

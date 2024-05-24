@@ -12,6 +12,8 @@
 #include <sys/select.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <arpa/inet.h>
+#include <poll.h>
 
 #include "correcteur.h"
 
@@ -29,23 +31,23 @@ int main(int nargs, char **args)
     char *hostname;
     int sd, host;
     struct sockaddr_in addr;
-    char *surnom;
 
     char buf[NBUF];
-    int nbuf, nr;
-    fd_set readfds;
-    int nfds;
+    char encoded[17];
+    // int nbuf;
+    // int nr;
+    // fd_set readfds;
+    // int nfds;
 
     /* prototype*/
-    if (nargs != 4)
+    if (nargs != 3)
     {
-        fprintf(stderr, "%s machine port surnom\n", args[0]);
+        fprintf(stderr, "%s machine port\n", args[0]);
         exit(1);
     }
 
     hostname = args[1];
     port = atoi(args[2]);
-    surnom = args[3];
 
     he = gethostbyname(hostname);
     if (he == 0)
@@ -79,75 +81,88 @@ int main(int nargs, char **args)
         exit(1);
     }
 
-    write(sd, surnom, strlen(surnom));
-    write(sd, "\n", 1); // on envoie le surnom et un retour à la ligne
+    printf("Connecté\n");
 
-    /*EXEMPLE SELECT FACILE*/
-    FD_ZERO(&readfds);
+    struct pollfd fds[2];
 
-    /*On écoute à la fois l'entrée standard et les messages distants, on pourrait
-     * aussi utiliser fork ou ioctl par exemple surtout quand on écoute seulement
-     * deux descripteurs simultanément*/
-    FD_SET(STDIN_FILENO, &readfds);
-    nfds = STDIN_FILENO + 1;
-    FD_SET(sd, &readfds);
-    if (sd >= nfds)
-        nfds = sd + 1; // toujours penser au +1 !!!
+    fds[0].fd = STDIN_FILENO;
+    fds[0].events = POLLIN;
+    fds[1].fd = sd;
+    fds[1].events = POLLIN;
 
+
+    // Mot par mot stop and wait et prevenir l'utilisateur de ce qui se passe 
     while (1)
     {
-        fd_set readfds2 = readfds; /*on utilise un nouvel ensemble fd_set car select modifie
-                        l'ensemble passé en paramètre !, en effet l'ensemble
-                        readfds2 est restreint aux descripteurs surlesquels il s'est
-                        passé un évenement */
-        nr = select(nfds, &readfds2, 0, 0, 0);
-        if (nr < 0)
+        char *new_buf = NULL;
+        // Lire l'entrée utilisateur
+        if ((new_buf = fgets(buf, NBUF, stdin)) != NULL)
         {
-            perror("select");
-            exit(1);
-        }
-        if (FD_ISSET(sd, &readfds2))
-        {
-            nbuf = read(sd, buf, NBUF);
-            write(STDOUT_FILENO, buf, nbuf);
-        }
-        if (FD_ISSET(STDIN_FILENO, &readfds2))
-        {
-            nbuf = read(STDIN_FILENO, buf, NBUF);
-            write(sd, buf, sizeof(buf));
-            /*
-            // Encodage de 8bits par 8 (un char)
-            for (int i = 0; i < nbuf; i++) {
-                uint16_t encoded = encode_G(buf[i] << 8); // On ajoute le padding de 8 bits
-                int attempts = 0; // Compte le nombre de renvois
-                int success = 0;
-                
-                while (attempts < NATTEMPTS && !success) {
-                    write(sd, &encoded, sizeof(encoded));
+            // Envoyer chaque caractère séparément en utilisant le stop-and-wait
+            for (int i = 0; i < strlen(new_buf); i++)
+            {
+                char c = new_buf[i];
+                uint16_t e = encode_G(c >> 8); // Ajouter le padding pour obtenir 16 bits
+                memcpy(encoded, (void*)&e, sizeof(uint16_t));
+                int attempts = 0;
+                int resend = 1;
+                encoded[16] = '\n'; // Pour bonne réception
+                while (resend)
+                {
+                    printf("debut send\n");
+                    // Envoyer le caractère encodé
+                    if (send(sd, encoded, sizeof(encoded), 0) < 0)
+                    {
+                        perror("send");
+                        exit(1);
+                    }
+                    printf("Envoi du message encodé --- %s -- ", encoded);
 
-                    // Lire la réponse du serveur
-                    char ack_buf[4];
-                    int ack_len = read(sd, ack_buf, sizeof(ack_buf) - 1);
-                    if (ack_len > 0) {
-                        ack_buf[ack_len] = '\0';
-                        if (strcmp(ack_buf, "ACK") == 0) {
-                            success = 1;
-                            printf("Paquet %d reçu par serveur\n", i);
-                        } else if (strcmp(ack_buf, "NACK") == 0) {
-                            printf("Paquet %d non reçu par serveur, renvoi...\n", i);
+                    // Attendre l'ACK
+                    if (poll(fds, 1, -1) < 0)
+                    {
+                        perror("poll");
+                        exit(1);
+                    }
+                    if (fds[0].revents & POLLIN)
+                    {
+                        char ack_buf[4];
+                        int n = recv(sd, ack_buf, sizeof(ack_buf), 0);
+                        if (n > 0)
+                        {
+                            ack_buf[n] = '\0';
+                            if (strcmp(ack_buf, "ACK") == 0)
+                            {
+                                printf("ACK reçu pour le caractère '%c'\n", c);
+                                resend = 0;
+                                break; // ACK reçu, passer au caractère suivant
+                            }
+                            else if (strcmp(ack_buf, "NACK") == 0)
+                            {
+                                printf("NACK reçu pour le caractère '%c', tentative #%d\n", c, attempts + 1);
+                                attempts++;
+                                if (attempts >= NATTEMPTS)
+                                {
+                                    fprintf(stderr, "Trop de tentatives, abandon.\n");
+                                    exit(1);
+                                }
+                                // Attendre un peu avant de réessayer
+                                sleep(1);
+                            }
+                        }
+                        else if (n == 0)
+                        {
+                            printf("Connexion fermée par le serveur\n");
+                            exit(1);
+                        }
+                        else
+                        {
+                            perror("recv");
+                            exit(1);
                         }
                     }
-                    attempts++;
                 }
-
-                // Si après 3 tentatives, toujours pas d'ACK, on abandonne
-                if (!success) {
-                    printf("Paquet %d n'est pas arrivé à destination après %d tentatives\n", i, NATTEMPTS);
-                    break;
-                }
-            }*/
-
-            
+            }
         }
     }
 
