@@ -12,7 +12,6 @@
 #include <sys/select.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <poll.h>
 
 #define BUFSIZE 1024
 #define MAXCONN 1
@@ -137,6 +136,7 @@ void nouvelleconnexion()
     while (!extrait(conn));
     strcpy(conn->surnom, buf);
 
+    FD_SET(sd2, &readfds);
     if (sd2 >= nfds)
         nfds = sd2 + 1;
 
@@ -201,16 +201,40 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    nouvelleconnexion();
-    
+    /* pour le moment le serveur ne prend rien
+    sur l'entree standard !*/
+    FD_ZERO(&readfds);
+    FD_SET(sd, &readfds);
+
+    /* SURTOUT NE PAS OUBLIER LE "+1" !!!!!!!*/
+    nfds = sd + 1;
+
     while (1)
     {
-        if (lit(&connexions[0]) != 0) {
-            communique(&connexions[0]);
+        fd_set readfds2 = readfds;
+        nr = select(nfds, &readfds2, 0, 0, 0);
+        if (nr < 0)
+        {
+            perror("select");
+            exit(1);
         }
-        else 
-            finconnexion(&connexions[0]);
-     
+        if (FD_ISSET(sd, &readfds2)) // socket d'écoute
+            nouvelleconnexion();
+        for (i = 0; i < MAXCONN; i++)
+        {
+            if (!connexions[i].libre)
+            {
+                if (FD_ISSET(connexions[i].sd, &readfds2))
+                {                                   // descripteur de communications
+                    if (lit(&connexions[i]) != 0) {  // on récupère les messages
+                        communique(&connexions[i]); // on les traite
+                        printf("communique\n");
+                    }
+                    else
+                        finconnexion(&connexions[i]); // c'est très simplifié !!!!
+                }
+            }
+        }
         printf("fin boucle\n");
     }
 
