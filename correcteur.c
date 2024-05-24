@@ -50,25 +50,6 @@ void print_word(int k, uint16_t value) {
     }
 }
 
-
-uint16_t encode_G(uint16_t m){
-    uint16_t data = m & 0xFF00; // Garder les 8 bits de données
-    uint16_t parity_bits = 0;
-
-    // Pour chaque bit de donnée
-    for (int i = 0; i < 8; i++) {
-        if (get_nth_bit(1, data)) // Si le premier bit est 1 faire la division (XOR)
-            data = data ^ POLYNOME;
-
-        data = data << 1;
-    }
-
-    parity_bits = data >> 8; // 8bits les plus significatifs
-
-    return (m & 0xFF00) | parity_bits;
-}
-
-
 int cardinal_bit(uint16_t m) {
     int cpt = 0;
     for (int i = 16; i > 0; i--) {  // Parcours les bits du poids fort au poids faible
@@ -140,4 +121,17 @@ int crc_error_amount(uint16_t m){
     }
 
     return -1;
+}
+
+
+uint16_t concat(uint8_t m, uint8_t crc) {
+    uint16_t message = m >> 8;
+    message <<= 8;
+    message |= crc;
+    return message;
+}
+
+uint16_t encode_G(uint8_t m) {
+    uint8_t crc = crcGeneration(m);
+    return concat(m, crc);
 }

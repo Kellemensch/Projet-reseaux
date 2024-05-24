@@ -19,7 +19,7 @@ void print_binary_16bit(uint16_t value);
 
 void print_word(int k, uint16_t value);
 
-uint16_t encode_G(uint16_t m);
+uint16_t encode_G(uint8_t m);
 
 int cardinal_bit(uint16_t m);
 
@@ -28,6 +28,8 @@ int min_hamming_distance(uint16_t generator);
 uint8_t crcGeneration(uint8_t m);
 
 uint8_t crcVerif(uint16_t m);
+
+uint16_t concat(uint8_t m, uint8_t crc);
 
 int crc_error_amount(uint16_t m);
 

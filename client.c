@@ -17,12 +17,9 @@
 
 #include "correcteur.h"
 
-/*Cette version est simplifié par rapport à celle qui est demandé dans l'énoncé
- * mais elle vous permettra de comprendre le comportment de la primitive select
- * notamment*/
-
 #define NBUF 1000
 #define NATTEMPTS 10
+
 
 int main(int nargs, char **args)
 {
@@ -33,13 +30,7 @@ int main(int nargs, char **args)
     struct sockaddr_in addr;
 
     char buf[NBUF];
-    char encoded[17];
-    // int nbuf;
-    // int nr;
-    // fd_set readfds;
-    // int nfds;
-
-    /* prototype*/
+    
     if (nargs != 3)
     {
         fprintf(stderr, "%s machine port\n", args[0]);
@@ -66,7 +57,6 @@ int main(int nargs, char **args)
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = host;
-    /*printf("%x %s\n",ntohl(host),inet_ntoa(addr.sin_addr));*/
 
     sd = socket(AF_INET, SOCK_STREAM, 0);
     if (sd < 0)
@@ -85,80 +75,67 @@ int main(int nargs, char **args)
 
     struct pollfd fds[2];
 
-    fds[0].fd = STDIN_FILENO;
-    fds[0].events = POLLIN;
-    fds[1].fd = sd;
+    fds[0].fd = sd;
+    fds[0].events = POLLIN | POLLOUT;
+    fds[1].fd = STDIN_FILENO;
     fds[1].events = POLLIN;
 
+    char input;
+    int str_len;
+    while (1) {
+        int poll_result = poll(fds, 2, 3); // Timeout à 3 pour essayer mais aucun changement
 
-    // Mot par mot stop and wait et prevenir l'utilisateur de ce qui se passe 
-    while (1)
-    {
-        char *new_buf = NULL;
-        // Lire l'entrée utilisateur
-        if ((new_buf = fgets(buf, NBUF, stdin)) != NULL)
-        {
-            // Envoyer chaque caractère séparément en utilisant le stop-and-wait
-            for (int i = 0; i < strlen(new_buf); i++)
-            {
-                char c = new_buf[i];
-                uint16_t e = encode_G(c >> 8); // Ajouter le padding pour obtenir 16 bits
-                memcpy(encoded, (void*)&e, sizeof(uint16_t));
-                int attempts = 0;
-                int resend = 1;
-                encoded[16] = '\n'; // Pour bonne réception
-                while (resend)
-                {
-                    printf("debut send\n");
-                    // Envoyer le caractère encodé
-                    if (send(sd, encoded, sizeof(encoded), 0) < 0)
-                    {
-                        perror("send");
+        if (poll_result == -1) {
+            perror("poll() error");
+            exit(1);
+        }
+
+        if (fds[1].revents & POLLIN) { // Entrée du terminal
+            if (read(STDIN_FILENO, &input, 1) > 0) {
+                // Attente pour envoyer
+                while (1) {
+                    poll_result = poll(fds, 1, 3);
+                    if (poll_result == -1) {
+                        perror("poll() error");
                         exit(1);
                     }
-                    printf("Envoi du message encodé --- %s -- ", encoded);
+                    if (fds[0].revents & POLLOUT) { // Envoi
+                        uint16_t encoded = encode_G(input);
+                        printf("encoded : %d\n", encoded);
+                        if (send(sd, &encoded, 1, 0) == -1) {
+                            perror("send() error");
+                            exit(1);
+                        }
+                        printf("Envoyé: %c\n", input);
+                        break;
+                    }
+                }
 
-                    // Attendre l'ACK
-                    if (poll(fds, 1, -1) < 0)
-                    {
-                        perror("poll");
+                // Attente pour envoyer ACK
+                while (1) {
+                    poll_result = poll(fds, 1, 3);
+                    if (poll_result == -1) {
+                        perror("poll() error");
                         exit(1);
                     }
-                    if (fds[0].revents & POLLIN)
-                    {
-                        char ack_buf[4];
-                        int n = recv(sd, ack_buf, sizeof(ack_buf), 0);
-                        if (n > 0)
-                        {
-                            ack_buf[n] = '\0';
-                            if (strcmp(ack_buf, "ACK") == 0)
-                            {
-                                printf("ACK reçu pour le caractère '%c'\n", c);
-                                resend = 0;
-                                break; // ACK reçu, passer au caractère suivant
-                            }
-                            else if (strcmp(ack_buf, "NACK") == 0)
-                            {
-                                printf("NACK reçu pour le caractère '%c', tentative #%d\n", c, attempts + 1);
-                                attempts++;
-                                if (attempts >= NATTEMPTS)
-                                {
-                                    fprintf(stderr, "Trop de tentatives, abandon.\n");
-                                    exit(1);
-                                }
-                                // Attendre un peu avant de réessayer
-                                sleep(1);
-                            }
-                        }
-                        else if (n == 0)
-                        {
-                            printf("Connexion fermée par le serveur\n");
+                    if (fds[0].revents & POLLIN) { // ACK ou NACK dispo à lire
+                        str_len = recv(sd, buf, NBUF, 0);
+                        if (str_len == -1) {
+                            perror("recv() error");
                             exit(1);
                         }
-                        else
-                        {
-                            perror("recv");
-                            exit(1);
+                        buf[str_len] = 0;
+                        if (strcmp(buf, "ACK") == 0) {
+                            printf("Reçu ACK pour: %c\n", input);
+                            break;
+                        }
+                        else if (strcmp(buf, "NACK") == 0) {
+                            printf("Reçu NACK pour: %c\n", input);
+                            if (send(sd, &input, sizeof(input), 0) == -1) {
+                                perror("send");
+                                exit(1);
+                            }
+                            printf("Réenvoi\n");
                         }
                     }
                 }
